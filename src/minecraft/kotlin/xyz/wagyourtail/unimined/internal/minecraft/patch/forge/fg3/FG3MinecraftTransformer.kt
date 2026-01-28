@@ -2,23 +2,10 @@ package xyz.wagyourtail.unimined.internal.minecraft.patch.forge.fg3
 
 import com.github.javaparser.JavaParser
 import com.github.javaparser.ParserConfiguration
-import com.github.javaparser.StaticJavaParser
 import com.github.javaparser.ast.CompilationUnit
-import com.github.javaparser.ast.Node
 import com.github.javaparser.ast.body.BodyDeclaration
-import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration
-import com.github.javaparser.ast.body.TypeDeclaration
-import com.github.javaparser.ast.visitor.VoidVisitor
-import com.github.javaparser.printer.DefaultPrettyPrinterVisitor
-import com.github.javaparser.printer.configuration.DefaultConfigurationOption
-import com.github.javaparser.printer.configuration.DefaultPrinterConfiguration
-import com.github.javaparser.printer.configuration.Indentation
 import com.github.javaparser.printer.lexicalpreservation.LexicalPreservingPrinter
 import com.github.javaparser.symbolsolver.JavaSymbolSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver
 import com.github.javaparser.symbolsolver.resolution.typesolvers.TypeSolverBuilder
 import com.google.common.base.Splitter
 import com.google.common.collect.ArrayListMultimap
@@ -27,6 +14,7 @@ import com.google.common.collect.Lists
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import kotlinx.coroutines.runBlocking
 import net.minecraftforge.binarypatcher.ConsoleTool
 import org.apache.commons.compress.archivers.jar.JarArchiveEntry
 import org.apache.commons.compress.archivers.jar.JarArchiveOutputStream
@@ -67,15 +55,15 @@ import java.nio.file.*
 import java.util.jar.JarFile
 import java.util.jar.JarOutputStream
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import kotlin.io.path.*
-import kotlin.jvm.javaClass
 
 open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecraftTransformer) :
     JarModMinecraftTransformer(
         project, parent.provider, jarModProvider = "forge", providerName = "${parent.providerName}-FG3"
     ) {
 
-    val cacheDir by lazy {
+    val cacheDir: Path by lazy {
         val forgeUniversal = parent.forge.dependencies.last()
         provider.minecraftData.mcVersionFolder.resolve(providerName).resolve(forgeUniversal.version!!)
     }
@@ -86,6 +74,120 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
         } else {
             false
         }
+    }
+    
+    val shouldAT by lazy { parent.accessTransformer != null && parent.accessTransformer!!.exists() && parent.accessTransformer!!.isFile }
+    val atMap: ArrayListMultimap<String, Modifier> by lazy {
+        if (shouldAT) {
+            val output = ArrayListMultimap.create<String, Modifier>()
+            parent.accessTransformer!!.readLines(StandardCharsets.UTF_8).forEach {
+                val line = Iterables.getFirst(Splitter.on('#').limit(2).split(it), "").trim()
+                if (!line.isEmpty()) {
+                    val parts = Lists.newArrayList(Splitter.on(" ").trimResults().split(line))
+                    var modifyClass = false
+                    var name = ""
+                    var desc = ""
+                    var modifyFinal = false
+                    if (parts.size < 4) {
+                        if (parts.size == 2) {
+                            modifyClass = true
+                        } else {
+                            val nameReference = parts[2]
+                            val parenIdx = nameReference.indexOf('(')
+                            if (parenIdx > 0) {
+                                desc = nameReference.substring(parenIdx)
+                                name = nameReference.take(parenIdx)
+                            } else {
+                                name = nameReference
+                            }
+                        }
+                        val className = parts[1].replace('/', '.')
+                        if (parts[0].endsWith("-f")) {
+                            modifyFinal = true
+                        }
+                        output.put(className, Modifier(modifyClass, name, desc, modifyFinal))
+                    }
+                }
+            }
+            output
+        } else {
+            ArrayListMultimap.create<String, Modifier>()
+        }
+    }
+    
+    val mcpFile by lazy { 
+        var stable39 : File? = null
+        val mapping = provider.mappings.mappings
+        mapping.dependencies.forEach { dependency ->
+            if ( dependency.group == "de.oceanlabs.mcp" && dependency.name == "mcp_stable") {
+                project.logger.info("Found mcp {}", dependency)
+                stable39 = mapping.getFiles(dependency, "zip").singleFile
+            }
+        }
+        stable39
+    }
+    
+    val fieldsMap = mutableMapOf<String, Pair<String, String>>()
+    val methodsMap = mutableMapOf<String, Pair<String, String>>()
+    val parameterMap = mutableMapOf<String, String>()
+    var created = false
+    
+    private fun intiMapping() {
+        if (created) return
+        val zip = ZipFile(mcpFile!!)
+        runBlocking {
+            for (fileName in zip.entries()) {
+                when (fileName.name) {
+                    "fields.csv" -> {
+                        val fileContent = zip.getInputStream(fileName)
+                        fileContent.bufferedReader(StandardCharsets.UTF_8).use { input ->
+                            for (line in input.lines()) {
+                                if (line.startsWith("searge") || line.startsWith("param") || line.isEmpty()) continue
+                                val values = line!!.split(',', limit = 4)
+                                if (values.size == 2) {
+                                    fieldsMap[values[0]] = values[1] to ""
+                                } else {
+                                    var javadoc = values[3]
+                                    if (javadoc.startsWith("\"")) javadoc = javadoc.substring(1, javadoc.length - 1)
+                                    javadoc = javadoc.replace("\\n", "\n\t")
+                                    fieldsMap[values[0]] = values[1] to javadoc
+                                }
+                            }
+                        }
+
+                    }
+                    "methods.csv" -> {
+                        val fileContent = zip.getInputStream(fileName)
+                        fileContent.bufferedReader(StandardCharsets.UTF_8).use { input ->
+                            for (line in input.lines()) {
+                                if (line.startsWith("searge") || line.startsWith("param") || line.isEmpty()) continue
+                                val values = line!!.split(',', limit = 4)
+                                if (values.size == 2) {
+                                    methodsMap[values[0]] = values[1] to ""
+                                } else {
+                                    var javadoc = values[3]
+                                    if (javadoc.startsWith("\"")) javadoc = javadoc.substring(1, javadoc.length)
+                                    javadoc = javadoc.replace("\\n", "\n\t")
+                                    methodsMap[values[0]] = values[1] to javadoc
+                                }
+                            }
+                        }
+                    }
+                    "params.csv" -> {
+                        val fileContent = zip.getInputStream(fileName)
+                        fileContent.bufferedReader(StandardCharsets.UTF_8).use { input ->
+                            for (line in input.lines()) {
+                                if (line.startsWith("searge") || line.startsWith("param") || line.isEmpty()) continue
+                                val values = line!!.split(',', limit = 4)
+                                parameterMap[values[0]] = values[1]
+                                
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        created = true
     }
 
     var unionRelauncherVersion: String = "1.1.0"
@@ -348,7 +450,7 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                 mojmap()
             } else {
                 val mcpConfigUserSpecified = entries.keys.contains("searge")
-                if (entries.keys.contains("searge") && !parent.customSearge) {
+                if (mcpConfigUserSpecified && !parent.customSearge) {
                     project.logger.warn("[Unimined/ForgeTransformer] FG3 does not support custom mcp_config (searge) version specification. Using ${mcpConfig.version} from userdev.")
                 }
                 if (!parent.customSearge) searge(mcpConfig.version!!)
@@ -850,81 +952,153 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
         linemappedPath: Path?,
         side: EnvType
     ) {
-        var preATOutputPath = outputPath
-        val shouldAT = isATExists()
-        if (shouldAT) {
-            preATOutputPath = outputPath.parent.resolve("${outputPath.nameWithoutExtension}-pre-at.jar")
-        }
         if (side != EnvType.JOINED) {
-            super.createSourcesJar(classpath, patchedJar, preATOutputPath, linemappedPath, side)
+            super.createSourcesJar(classpath, patchedJar, outputPath, linemappedPath, side)
         } else {
             if (provider.mappings.checkedNs(obfNamespace) != provider.mappings.devNamespace) {
+                this.intiMapping()
                 val temp =
-                    preATOutputPath.parent.resolve("${preATOutputPath.nameWithoutExtension}-${defaultProdNamespace()}.jar")
+                    outputPath.parent.resolve("${outputPath.nameWithoutExtension}-${defaultProdNamespace()}.jar")
+                val temp1 =
+                    outputPath.parent.resolve("${outputPath.nameWithoutExtension}-${defaultProdNamespace()}-javadoc.jar")
+                val temp2 = if (shouldAT) {
+                    outputPath.parent.resolve("${outputPath.nameWithoutExtension}-${defaultProdNamespace()}-remapped.jar")
+                } else {
+                    outputPath
+                }
                 executeMcp("forgePatch", temp)
+                appendJavadoc(temp, temp1, patchedJar)
+                remapSourceJar(temp1, temp2)
+                if (shouldAT) {
+                    applyAT(temp2, outputPath, patchedJar)
+                }
+                /*
                 provider.sourceProvider.sourceRemapper.remap(
-                    mapOf(temp to preATOutputPath),
+                    mapOf(temp to outputPath),
                     provider.minecraftLibraries,
                     defaultProdNamespace(),
                     provider.mappings.devNamespace
-                )
+                )*/
+                
             } else {
-                executeMcp("forgePatch", preATOutputPath)
+                executeMcp("forgePatch", outputPath)
             }
-        }
-        if (shouldAT) {
-            atProcessSourceJar(preATOutputPath, outputPath, patchedJar)
         }
     }
 
-    private fun isATExists(): Boolean {
-        return parent.accessTransformer != null && parent.accessTransformer!!.exists() && parent.accessTransformer!!.isFile
-    }
-
-    private fun atProcessSourceJar(input: Path, output: Path, patchedJar: Path) {
-        val atmap = ArrayListMultimap.create<String, Modifier>()
-        if (isATExists()) {
-            parent.accessTransformer!!.readLines(StandardCharsets.UTF_8).forEach {
-                val line = Iterables.getFirst(Splitter.on('#').limit(2).split(it), "").trim()
-                if (!line.isEmpty()) {
-                    val parts = Lists.newArrayList(Splitter.on(" ").trimResults().split(line))
-                    var modifyClass = false
-                    var name = ""
-                    var desc = ""
-                    var modifyFinal = false
-                    if (parts.size < 4) {
-                        if (parts.size == 2) {
-                            modifyClass = true
-                        } else {
-                            val nameReference = parts[2]
-                            val parenIdx = nameReference.indexOf('(')
-                            if (parenIdx > 0) {
-                                desc = nameReference.substring(parenIdx)
-                                name = nameReference.take(parenIdx)
-                            } else {
-                                name = nameReference
-                            }
-                        }
-                        val className = parts[1].replace('/', '.')
-                        if (parts[0].endsWith("-f")) {
-                            modifyFinal = true
-                        }
-                        atmap.put(className, Modifier(modifyClass, name, desc, modifyFinal))
-                    }
-                }
-            }
-        }
-
+    private fun appendJavadoc(input: Path, output: Path, patchedJar: Path) {
+        project.logger.info("Appending Javadoc on {}", input)
         val inputJar = JarFile(input.toFile())
-        
         val parserConfiguration = ParserConfiguration().setLexicalPreservationEnabled(true)
             .setLanguageLevel(ParserConfiguration.LanguageLevel.BLEEDING_EDGE)
             .setSymbolResolver(JavaSymbolSolver(TypeSolverBuilder().withJAR(patchedJar).withCurrentJRE().build()))
         val parser = JavaParser(parserConfiguration)
-        val outStram = JarOutputStream(FileOutputStream(output.toFile()))
+        val outStream = JarOutputStream(FileOutputStream(output.toFile()))
+
+        inputJar.entries().iterator().forEach { entry ->
+            if (entry.name.endsWith(".java")) {
+                val cu: CompilationUnit = parser.parse(inputJar.getInputStream(entry)).result.get()
+                val types = mutableListOf<BodyDeclaration<*>>()
+                cu.types.forEach { type ->
+                    type.members.forEach { member ->
+                        if (member.isClassOrInterfaceDeclaration) {
+                            types.add(member.asClassOrInterfaceDeclaration())
+                        }
+                    }
+                }
+                cu.types.forEach { type ->
+                    if (type.isClassOrInterfaceDeclaration) {
+                        types.add(type)
+                    }
+                }
+                types.forEach { type ->
+                    type.asClassOrInterfaceDeclaration().fields.forEach { field ->
+                        val firstVar = field.variables.first() 
+                        if (fieldsMap[firstVar.name.asString()] != null) {
+                            if (!fieldsMap[firstVar.name.asString()]!!.second.isEmpty()) {
+                                try {
+                                    field.setJavadocComment(fieldsMap[firstVar.name.asString()]!!.second)
+                                } catch (e : Exception) {
+                                    project.logger.info("Failed setting Javadoc {} on field {}", fieldsMap[firstVar.name.asString()]!!.second, firstVar.name, e)
+                                }
+                            }
+                        }
+                        
+                    }
+                    type.asClassOrInterfaceDeclaration().methods.forEach { method ->
+                        if (methodsMap[method.name.asString()] != null) {
+                            if (!methodsMap[method.name.asString()]!!.second.isEmpty()) {
+                                method.setJavadocComment(methodsMap[method.name.asString()]!!.second)
+                            }
+                        }
+                    }
+                }
+
+                val outEntry = ZipEntry(entry.name)
+                outStream.putNextEntry(outEntry)
+                IOUtils.write(LexicalPreservingPrinter.print(cu), outStream, StandardCharsets.UTF_8)
+                outStream.closeEntry()
+            }
+        }
+        outStream.close()
+    }
+    
+    private fun remapSourceJar(input: Path, output: Path) {
+        project.logger.info("Remapping jar {}", input)
+        val pattern = Regex("((?:func|field|p)_i?\\d+_(?:\\d{1,2}|[a-zA-Z]{1,2})_?)")
+        val inputJar = JarFile(input.toFile())
+        val outStream = JarOutputStream(FileOutputStream(output.toFile()))
         
         inputJar.entries().iterator().forEach { entry ->
-            project.logger.info("Checking jar entry {}", entry.name)
+            val outEntry = ZipEntry(entry.name)
+            outStream.putNextEntry(outEntry)
+            inputJar.getInputStream(entry).use { inputStream ->
+                inputStream.reader(StandardCharsets.UTF_8).readLines().forEach { line ->
+                    val outLine = line.replace(pattern) { matchResult ->
+                        when {
+                            matchResult.value.startsWith("field") -> {
+                                if (fieldsMap.contains(matchResult.value)) {
+                                    fieldsMap[matchResult.value]!!.first
+                                } else {
+                                    matchResult.value
+                                }
+                            }
+
+                            matchResult.value.startsWith("func") -> {
+                                if (methodsMap.contains(matchResult.value)) {
+                                    methodsMap[matchResult.value]!!.first
+                                } else {
+                                    matchResult.value
+                                }
+                            }
+
+                            matchResult.value.startsWith("p_") -> parameterMap.getOrDefault(
+                                matchResult.value,
+                                matchResult.value
+                            )
+
+                            else -> matchResult.value
+                        }
+                    }
+                    IOUtils.write(outLine + "\n", outStream, StandardCharsets.UTF_8)
+                }
+            }
+            outStream.closeEntry()
+        }
+        outStream.close()
+        
+    }
+
+    private fun applyAT(input: Path, output: Path, patchedJar: Path) {
+        project.logger.info("Applying AT on jar {}", input)
+        val inputJar = JarFile(input.toFile())
+        val parserConfiguration = ParserConfiguration().setLexicalPreservationEnabled(true)
+            .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21)
+            .setSymbolResolver(JavaSymbolSolver(TypeSolverBuilder().withJAR(patchedJar).withCurrentJRE().build()))
+        val parser = JavaParser(parserConfiguration)
+        val outStream = JarOutputStream(FileOutputStream(output.toFile()))
+        
+        inputJar.entries().iterator().forEach { entry ->
             if (entry.name.endsWith(".java")) {
                 val cu: CompilationUnit = parser.parse(inputJar.getInputStream(entry)).result.get()
                 val types = mutableListOf<BodyDeclaration<*>>()
@@ -935,46 +1109,42 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                         }
                     }
                 }
-                cu.primaryType.ifPresent { types.add(it) }
                 cu.types.forEach { type ->
                     if (type.isClassOrInterfaceDeclaration) {
                         types.add(type)
                     }
                 }
-                types.forEach { member ->
-                    project.logger.info("Checking class/interface {}", member.asClassOrInterfaceDeclaration().fullyQualifiedName.get())
-                    val modifiers = atmap.get(member.asClassOrInterfaceDeclaration().fullyQualifiedName.get())
+                types.forEach { type ->
+                    val modifiers = atMap[type.asClassOrInterfaceDeclaration().fullyQualifiedName.get()]
                     if (modifiers.isNotEmpty()) {
                         modifiers.forEach { modifier ->
                             if (modifier.modifyClass) {
-                                member.asClassOrInterfaceDeclaration().isPublic = true
-                                member.asClassOrInterfaceDeclaration().isPrivate = false
-                                member.asClassOrInterfaceDeclaration().isProtected = false
+                                type.asClassOrInterfaceDeclaration().isPublic = true
+                                type.asClassOrInterfaceDeclaration().isPrivate = false
+                                type.asClassOrInterfaceDeclaration().isProtected = false
                                 if (modifier.modifyFinal) {
-                                    member.asClassOrInterfaceDeclaration().isFinal = false
+                                    type.asClassOrInterfaceDeclaration().isFinal = false
                                 }
                             } else if (modifier.desc.isEmpty()) {
-                                member.asClassOrInterfaceDeclaration().fields.forEach { field ->
-                                    project.logger.info("Checking field {}", field.getVariable(0).name)
+                                type.asClassOrInterfaceDeclaration().fields.forEach { field ->
                                     if (field.getVariable(0).name.asString() == modifier.name) {
-                                        field.isPublic = true
-                                        field.isPrivate = false
-                                        field.isProtected = false
                                         if (modifier.modifyFinal) {
                                             field.isFinal = false
                                         }
+                                        field.isPublic = true
+                                        field.isPrivate = false
+                                        field.isProtected = false
                                     }
                                 }
                             } else {
-                                member.asClassOrInterfaceDeclaration().methods.forEach { method ->
-                                    project.logger.info("Checking field {} {}", method.name.asString(), method.toDescriptor())
+                                type.asClassOrInterfaceDeclaration().methods.forEach { method ->
                                     if (method.name.asString() == modifier.name && method.toDescriptor() == modifier.desc) {
-                                        method.isPublic = true
-                                        method.isPrivate = false
-                                        method.isProtected = false
                                         if (modifier.modifyFinal) {
                                             method.isFinal = false
                                         }
+                                        method.isPublic = true
+                                        method.isPrivate = false
+                                        method.isProtected = false
                                     }
                                 }
                             }
@@ -983,12 +1153,12 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                 }
                         
                 val outEntry = ZipEntry(entry.name)
-                outStram.putNextEntry(outEntry)
-                IOUtils.write(LexicalPreservingPrinter.print(cu), outStram, StandardCharsets.UTF_8)
-                outStram.closeEntry()
+                outStream.putNextEntry(outEntry)
+                IOUtils.write(LexicalPreservingPrinter.print(cu), outStream, StandardCharsets.UTF_8)
+                outStream.closeEntry()
             }
         }
-        outStram.close()
+        outStream.close()
     }
 
     data class Modifier(val modifyClass: Boolean, val name: String, val desc: String, val modifyFinal: Boolean)
