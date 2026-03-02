@@ -196,7 +196,7 @@ open class CleanroomMinecraftTransformer(project: Project, provider: MinecraftPr
         project.logger.info("Path after: {}", config.classpath.files.toString())
         project.logger.info("Extra mod paths: {}", extraPath.toString())
         config.jvmArgs("-Dcrl.dev.extrapath=${extraPath.joinToString(File.pathSeparator) { it.absolutePath }}")
-        config.javaVersion = JavaVersion.VERSION_21
+        config.javaVersion = JavaVersion.VERSION_25
     }
 
     override fun applyServerRunTransform(config: RunConfig) {
@@ -219,7 +219,7 @@ open class CleanroomMinecraftTransformer(project: Project, provider: MinecraftPr
         project.logger.info("Path after: {}", config.classpath.files.toString())
         project.logger.info("Extra mod paths: {}", extraPath.toString())
         config.jvmArgs("-Dcrl.dev.extrapath=${extraPath.joinToString(File.pathSeparator) { it.absolutePath }}")
-        config.javaVersion = JavaVersion.VERSION_21
+        config.javaVersion = JavaVersion.VERSION_25
     }
 
     class CleanroomFG3(project: Project, parent: CleanroomMinecraftTransformer): FG3MinecraftTransformer(project, parent) {
