@@ -31,6 +31,7 @@ import org.gradle.api.file.FileCollection
 import org.gradle.api.logging.LogLevel
 import org.jetbrains.annotations.ApiStatus
 import org.jetbrains.annotations.VisibleForTesting
+import org.objectweb.asm.tree.FieldInsnNode
 import xyz.wagyourtail.unimined.api.minecraft.MinecraftJar
 import xyz.wagyourtail.unimined.api.minecraft.task.AbstractRemapJarTask
 import xyz.wagyourtail.unimined.api.runs.RunConfig
@@ -749,6 +750,11 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                                     classNode.accept(classWriter)
                                     classFile.outputStream().use { it.write(classWriter.toByteArray()) }
                                 }
+                                classNode.methods.forEach { it.instructions.forEach { node -> 
+                                    if (node is FieldInsnNode && node.name == "b") {
+                                        node.name = "HASH"
+                                    }
+                                } }
                             }
                             "IObjectIntIterable.class" -> {
                                 project.logger.lifecycle("[Unimined/Forge] Patching IObjectIntIterable...")
