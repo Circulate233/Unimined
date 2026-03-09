@@ -745,16 +745,19 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                                 val field = classNode.fields.find { it.name == "b" }
                                 if (field != null) {
                                     field.name = "HASH"
+                                    classNode.methods.forEach { it.instructions
+                                        .filterIsInstance<FieldInsnNode>()
+                                        .forEach { fieldInsnNode ->
+                                            if (fieldInsnNode.name.equals("b")) {
+                                                fieldInsnNode.name = "HASH"
+                                            }
+                                        }
+                                    }
                                     
                                     val classWriter = ClassWriter(0)
                                     classNode.accept(classWriter)
                                     classFile.outputStream().use { it.write(classWriter.toByteArray()) }
                                 }
-                                classNode.methods.forEach { it.instructions.forEach { node -> 
-                                    if (node is FieldInsnNode && node.name == "b") {
-                                        node.name = "HASH"
-                                    }
-                                } }
                             }
                             "IObjectIntIterable.class" -> {
                                 project.logger.lifecycle("[Unimined/Forge] Patching IObjectIntIterable...")
