@@ -17,6 +17,9 @@ import com.google.gson.JsonParser
 import kotlinx.coroutines.runBlocking
 import net.minecraftforge.binarypatcher.ConsoleTool
 import org.apache.commons.compress.archivers.jar.JarArchiveEntry
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.tree.ClassNode
 import org.apache.commons.compress.archivers.jar.JarArchiveOutputStream
 import org.apache.commons.io.IOUtils
 import org.apache.commons.io.output.NullOutputStream
@@ -706,6 +709,76 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
             shadedForge
         }
     }
+    
+    /**
+     * Patch things that fixed in mcp patch but not the class bytes
+     */
+    protected open fun applyAsmTransforms(minecraft: MinecraftJar): MinecraftJar {
+        
+        val target = MinecraftJar(
+            minecraft,
+            patches = minecraft.patches + "asmFixes"
+        )
+        
+        if (target.path.exists() && !project.unimined.forceReload) {
+            return target
+        }
+        
+        project.logger.lifecycle("[Unimined/Forge] Applying ASM transforms to fix additional issues...")
+        
+        Files.copy(minecraft.path, target.path, StandardCopyOption.REPLACE_EXISTING)
+        
+        try {
+            target.path.openZipFileSystem(mapOf("mutable" to true)).use { fs ->
+                for (classFile in fs.getPath("/").walk()
+                    .filter { it.toString().endsWith(".class") }) {
+                    project.logger.info(classFile.fileName.toString())
+                    try {
+                        when (classFile.fileName.toString()) {
+                            "KeyBinding.class" -> {
+                                project.logger.lifecycle("[Unimined/Forge] Patching KeyBinding...")
+                                val classReader = ClassReader(classFile.inputStream().readBytes())
+                                val classNode = ClassNode()
+                                classReader.accept(classNode, 0)
+
+                                val field = classNode.fields.find { it.name == "b" }
+                                if (field != null) {
+                                    field.name = "HASH"
+                                    
+                                    val classWriter = ClassWriter(0)
+                                    classNode.accept(classWriter)
+                                    classFile.outputStream().use { it.write(classWriter.toByteArray()) }
+                                }
+                            }
+                            "IObjectIntIterable.class" -> {
+                                project.logger.lifecycle("[Unimined/Forge] Patching IObjectIntIterable...")
+                                val classReader = ClassReader(classFile.inputStream().readBytes())
+                                val classNode = ClassNode()
+                                classReader.accept(classNode, 0)
+
+                                classNode.signature = "<V:Ljava/lang/Object;>Ljava/lang/Object;Ljava/lang/Iterable<TV;>;"
+
+                                val classWriter = ClassWriter(0)
+                                classNode.accept(classWriter)
+                                classFile.outputStream().use { it.write(classWriter.toByteArray()) }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        project.logger.debug(
+                            "[Unimined/Forge/ASM] Failed to transform {}: {}",
+                            classFile.fileName,
+                            e.message
+                        )
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            target.path.deleteIfExists()
+            throw e
+        }
+        
+        return target
+    }
 
     val legacyClasspath: Path by lazy {
         val lcp = provider.localCache.createDirectories().resolve("legacy_classpath.txt")
@@ -849,7 +922,7 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
     }
 
     override fun afterRemap(baseMinecraft: MinecraftJar): MinecraftJar {
-        return fixForge(baseMinecraft)
+        return applyAsmTransforms(fixForge(baseMinecraft))
     }
 
     private fun addIncludeToMetadata(json: JsonObject, dep: MavenCoords, path: String) {

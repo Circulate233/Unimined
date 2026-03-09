@@ -175,7 +175,6 @@ class MCPConfig(
 
     private val nullResult = StepResult("", null)
 
-    @Suppress("RemoveExplicitTypeArguments")
     private val stepResult = defaultedMapOf<String, StepResult> {
         val step = steps.getValue(it)
         step.prev?.let { this.getValue(it) }
@@ -358,7 +357,7 @@ class MCPConfig(
                             }
                         }),
                         EnvType.JOINED,
-                        mapOf<String, String>("obf" to "source")
+                        mapOf("obf" to "source")
                     )
                 }
             }
