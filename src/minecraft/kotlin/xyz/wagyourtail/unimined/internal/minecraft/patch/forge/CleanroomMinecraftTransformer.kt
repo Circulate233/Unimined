@@ -35,7 +35,7 @@ open class CleanroomMinecraftTransformer(project: Project, provider: MinecraftPr
     override var forgeTransformer: JarModMinecraftTransformer by FinalizeOnRead(CleanroomFG3(project, this))
 
     init {
-        atDependency = project.dependencies.create("net.minecraftforge:accesstransformers:8.1.6")
+        atDependency = project.dependencies.create("top.outlands:accesstransformers:8.3.0")
         atMainClass = "net.minecraftforge.accesstransformer.TransformerProcessor"
     }
 
@@ -69,6 +69,7 @@ open class CleanroomMinecraftTransformer(project: Project, provider: MinecraftPr
         project.unimined.cleanroomRepos()
         project.unimined.arcseekersMaven()
         project.unimined.minecraftForgeMaven()
+        project.unimined.neoForgedMaven()
         project.repositories.removeIf { it.name == "minecraft" }
         project.repositories.maven { repo ->
             repo.name = "minecraft"
