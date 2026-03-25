@@ -69,7 +69,6 @@ open class CleanroomMinecraftTransformer(project: Project, provider: MinecraftPr
         project.unimined.cleanroomRepos()
         project.unimined.arcseekersMaven()
         project.unimined.minecraftForgeMaven()
-        project.unimined.neoForgedMaven()
         project.repositories.removeIf { it.name == "minecraft" }
         project.repositories.maven { repo ->
             repo.name = "minecraft"
