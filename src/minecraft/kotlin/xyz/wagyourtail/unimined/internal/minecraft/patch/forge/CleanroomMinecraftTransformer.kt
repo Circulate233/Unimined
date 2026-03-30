@@ -68,7 +68,7 @@ open class CleanroomMinecraftTransformer(project: Project, provider: MinecraftPr
     override fun addMavens() {
         project.unimined.cleanroomRepos()
         project.unimined.arcseekersMaven()
-        project.unimined.minecraftForgeMaven()
+        project.unimined.minecraftForgeMaven()remote
         project.repositories.removeIf { it.name == "minecraft" }
         project.repositories.maven { repo ->
             repo.name = "minecraft"
