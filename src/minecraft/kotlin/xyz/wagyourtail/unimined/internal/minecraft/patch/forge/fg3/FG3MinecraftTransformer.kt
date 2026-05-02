@@ -718,6 +718,14 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
 
         //   shade in forge jar
         val shadedForge = super.transform(patchedMC)
+
+        // Modern NeoForge's FML loader GameLocator rejects merged jars where Minecraft's common
+        // resources and the NeoForge jar come from the same jar. Remove the Minecraft asset-root
+        // marker files from the shaded jar so the loader resolves them from clientExtra instead.
+        if (isModernNeo) {
+            removeMinecraftResourceMarkers(shadedForge.path)
+        }
+
         return if (userdevCfg["notchObf"]?.asBoolean == true) {
             provider.minecraftRemapper.provide(shadedForge, provider.mappings.checkedNs("searge"))
         } else {
@@ -801,6 +809,20 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
         }
         
         return target
+    }
+
+    private fun removeMinecraftResourceMarkers(jarPath: Path) {
+        val markers = listOf("data/.mcassetsroot", "assets/.mcassetsroot")
+        val hasAny = jarPath.openZipFileSystem().use { fs ->
+            markers.any { Files.exists(fs.getPath(it)) }
+        }
+        if (!hasAny) return
+        project.logger.info("[Unimined/ForgeTransformer] Removing Minecraft asset-root markers from ${jarPath.fileName} to fix NeoForge GameLocator conflict")
+        jarPath.openZipFileSystem(mapOf("mutable" to true)).use { fs ->
+            for (marker in markers) {
+                Files.deleteIfExists(fs.getPath(marker))
+            }
+        }
     }
 
     val legacyClasspath: Path by lazy {
