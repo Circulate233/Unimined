@@ -106,7 +106,7 @@ class ModRemapProvider(config: Set<Configuration>, val project: Project, val pro
         for ((c, artifacts) in originalDepsFiles) {
             for (r in artifacts.values) {
                 if (r.nameWithoutExtension == name) {
-                    project.logger.debug("[Unimined/ModRemapper] $file is an output of $c")
+                    project.logger.debug("[Unimined/ModRemapper] {} is an output of {}", file, c)
                     return@runBlocking c
                 }
             }
@@ -127,6 +127,7 @@ class ModRemapProvider(config: Set<Configuration>, val project: Project, val pro
                 )
             )
             .skipLocalVariableMapping(true)
+            .propagateUnmappedSuper(provider.mcPatcher !is ForgeLikePatcher<*>)
             .ignoreConflicts(true)
             .threads(Runtime.getRuntime().availableProcessors())
             .extraRemapper(provider.mappings.getExtraRemapper(
@@ -298,7 +299,7 @@ class ModRemapProvider(config: Set<Configuration>, val project: Project, val pro
     ) = runBlocking {
         val inpFile = input.second.first
         val targetFile = input.second.second
-        val manifest = (JarFile(inpFile).use { it.manifest }?.mainAttributes?.getValue("FMLAT") as String?)?.split(" ") ?: emptyList()
+        val manifest = JarFile(inpFile).use { it.manifest }?.mainAttributes?.getValue("FMLAT")?.split(" ") ?: emptyList()
         project.logger.info("[Unimined/ModRemapper] Remapping mod from $inpFile -> $targetFile with mapping target $toNs")
         try {
             OutputConsumerPath.Builder(targetFile).build().use {

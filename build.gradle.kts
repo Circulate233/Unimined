@@ -46,6 +46,7 @@ repositories {
     mavenCentral()
     maven("https://maven.wagyourtail.xyz/releases")
     maven("https://maven.wagyourtail.xyz/snapshots")
+    maven("https://maven.outlands.top/releases")
     maven("https://maven.neoforged.net/releases")
     maven("https://maven.minecraftforge.net/")
     maven("https://maven.fabricmc.net/")
