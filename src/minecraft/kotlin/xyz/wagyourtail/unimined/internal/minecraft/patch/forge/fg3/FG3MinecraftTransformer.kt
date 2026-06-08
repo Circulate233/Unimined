@@ -1245,7 +1245,7 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                                 }
                             } else if (modifier.desc.isEmpty()) {
                                 type.asClassOrInterfaceDeclaration().fields.forEach { field ->
-                                    if (field.getVariable(0).name.asString() == modifier.name) {
+                                    if (modifier.name == "*" || field.getVariable(0).name.asString() == modifier.name) {
                                         if (modifier.modifyFinal) {
                                             field.isFinal = false
                                         }
@@ -1256,7 +1256,7 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
                                 }
                             } else {
                                 type.asClassOrInterfaceDeclaration().methods.forEach { method ->
-                                    if (method.name.asString() == modifier.name && method.toDescriptor() == modifier.desc) {
+                                    if ((modifier.name == "*" && modifier.desc == "()") || (method.name.asString() == modifier.name && method.toDescriptor() == modifier.desc)) {
                                         if (modifier.modifyFinal) {
                                             method.isFinal = false
                                         }
