@@ -132,7 +132,7 @@ open class FG3MinecraftTransformer(project: Project, val parent: ForgeLikeMinecr
         var stable39 : File? = null
         val mapping = provider.mappings.mappings
         mapping.dependencies.forEach { dependency ->
-            if ( dependency.group == "de.oceanlabs.mcp" && dependency.name == "mcp_stable") {
+            if ( dependency.group == "de.oceanlabs.mcp" && dependency.name == "mcp_stable" || dependency.name == "mcp_snapshot") {
                 project.logger.info("Found mcp {}", dependency)
                 stable39 = mapping.getFiles(dependency, "zip").singleFile
             }
