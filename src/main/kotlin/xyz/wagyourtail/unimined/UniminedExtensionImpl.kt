@@ -535,6 +535,13 @@ open class UniminedExtensionImpl(project: Project) : UniminedExtension(project) 
                 it.excludeGroup("ca.weblite")
             }
         }
+        project.repositories.maven { repo ->
+            repo.name = "forge" //backup
+            repo.url = URI.create("https://maven.minecraftforge.net/")
+            repo.content {
+                it.includeGroup("org.lwjgl")
+            }
+        }
         project.repositories.all { repo ->
             if (repo != modsRemapRepo) {
                 repo.content {
