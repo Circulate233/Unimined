@@ -101,6 +101,38 @@ class ModRemapProvider(config: Set<Configuration>, val project: Project, val pro
         resolved
     }
 
+    private val originalDepsSourceFiles = defaultedMapOf<Configuration, Map<ResolvedArtifact, File?>> {
+        val resolved = mutableMapOf<ResolvedArtifact, File?>()
+        for (artifact in originalDepsFiles[it].keys) {
+            if (artifact.moduleVersion.id.group == "curse.maven") {
+                resolved[artifact] = null
+                continue
+            }
+            val sourceDep = project.dependencies.create(mapOf(
+                "group" to artifact.moduleVersion.id.group,
+                "name" to artifact.name,
+                "version" to artifact.moduleVersion.id.version,
+                "classifier" to "sources",
+                "ext" to "jar"
+            ))
+            try {
+                val detached = project.configurations.detachedConfiguration()
+                detached.dependencies.add(sourceDep)
+                val sourceFile = detached.resolvedConfiguration.resolvedArtifacts
+                    .firstOrNull { a -> a.extension != "pom" }
+                    ?.file
+                resolved[artifact] = sourceFile
+                if (sourceFile != null) {
+                    project.logger.info("[Unimined/ModRemapper]    Source: $sourceDep -> $sourceFile")
+                }
+            } catch (e: Exception) {
+                project.logger.info("[Unimined/ModRemapper]    No source artifact for ${artifact.stringify()}: ${e.message}")
+                resolved[artifact] = null
+            }
+        }
+        resolved
+    }
+
     fun getConfigForFile(file: File): Configuration? = runBlocking {
         val name = file.nameWithoutExtension.substringBefore("-mapped-${provider.mappings.combinedNames()}")
         for ((c, artifacts) in originalDepsFiles) {
@@ -208,6 +240,15 @@ class ModRemapProvider(config: Set<Configuration>, val project: Project, val pro
                 mods.putAll(
                     tags.join().filterValues { it == null }.mapValues { targets[it.key]!!.second.first.toFile() }
                 )
+            }
+
+            // copy source jars alongside remapped binary jars
+            for (c in configurations) {
+                for ((artifact, sourceFile) in originalDepsSourceFiles[c]) {
+                    if (sourceFile == null || !sourceFile.exists()) continue
+                    project.logger.info("[Unimined/ModRemapper] Copying source jar for ${artifact.stringify()}")
+                    copySourceJar(artifact, sourceFile, devNamespace)
+                }
             }
 
             // supply back to proper configs
@@ -326,6 +367,29 @@ class ModRemapProvider(config: Set<Configuration>, val project: Project, val pro
         } catch (e: Exception) {
             targetFile.deleteIfExists()
             throw e
+        }
+    }
+
+    private fun copySourceJar(
+        artifact: ResolvedArtifact,
+        sourceFile: File,
+        devNamespace: Namespace
+    ) {
+        val sourceBaseName = sourceFile.nameWithoutExtension.removeSuffix("-sources")
+        val targetSourceFile = (provider.mods as ModsProvider).modTransformFolder()
+            .resolve("$sourceBaseName-mapped-${devNamespace}-sources.${sourceFile.extension}")
+
+        if (!project.unimined.forceReload && targetSourceFile.exists()) {
+            project.logger.info("[Unimined/ModRemapper]   Skipping source copy (already exists)")
+            return
+        }
+
+        project.logger.info("[Unimined/ModRemapper]   $sourceFile -> $targetSourceFile")
+        try {
+            Files.copy(sourceFile.toPath(), targetSourceFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: Exception) {
+            targetSourceFile.deleteIfExists()
+            throw IllegalStateException("Failed to copy source jar for ${artifact.stringify()} to $targetSourceFile", e)
         }
     }
 
